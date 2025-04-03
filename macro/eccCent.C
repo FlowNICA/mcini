@@ -108,7 +108,7 @@ void eccCent(TString inputFileName="test.root", TString outputFileName="output.r
     if (aver2 != 0) ecc2 = TMath::Sqrt(avercos2*avercos2 + aversin2*aversin2)/ aver2;
     if (aver3 != 0) ecc3 = TMath::Sqrt(avercos3*avercos3 + aversin3*aversin3)/ aver3;
     if (iEvent%1000 == 0) std::cout << "\tNpart(std) = " << iniState->getNPart()
-      << " Npart(custom) = " << Npart++ << std::endl;
+      << " Npart(custom) = " << Npart << std::endl;
  
     refMult = 0;
     for (int iPart=0; iPart<event->GetNpa(); iPart++)

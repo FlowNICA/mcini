@@ -11,6 +11,7 @@
 #include <URun.h>
 #include <UEvent.h>
 #include <UParticle.h>
+#include <EventInitialState.h>
 
 namespace {
 using std::ifstream;
@@ -41,21 +42,22 @@ unsigned int countWordsInTheString(const std::string &str) {
   return words;
 }
 
-void parseRunHeader(const string &line) {
-  stringstream stream(line);
-
-  string hashStr;
-  stream >> hashStr;
-  if (hashStr != "#") {
-    throw std::runtime_error("Malformed run header: must start with hash");
-  }
-
-  unsigned int nEvents{0};
-  stream >> nEvents;
-
-  getEntity<URun>()->SetNEvents(nEvents);
+// ------------------------------------------------------------------
+// JAM2 does not provide JAMRUN.DAT.
+// We still create URun in the output file, but fill it with zeros for now.
+// ------------------------------------------------------------------
+void initURunWithZeroes() {
+  getEntity<URun>()->SetNEvents(0);
+  // For now filled with zeroes
 }
 
+// ------------------------------------------------------------------
+// JAM2 event header format (from fill()):
+//   # iev  nv  ncollG  npartG  b  npart  ncoll  ncollBB
+// Stored into:
+//   UEvent: id, b
+//   EventInitialState: id, NPart = npart, NColl = ncoll
+// ------------------------------------------------------------------
 void parseEventHeader(const string &line) {
   stringstream stream(line);
 
@@ -66,33 +68,38 @@ void parseEventHeader(const string &line) {
   }
 
   unsigned int eventId{0};
-  unsigned int nParticles{0};
-  unsigned int nBaryons{0};
-  unsigned int nMesons{0};
+  unsigned int nv{0};
 
-  float impactParameter{-1.};
+  unsigned int ncollG{0};
+  unsigned int npartG{0};
 
-  unsigned int nParticipants{0};
-  unsigned int nCollisions{0};
+  double impactParameter{0.0};
 
-  stream
-      >> eventId >> nParticles >> nBaryons >> nMesons >> impactParameter >> nParticipants >> nCollisions;
+  unsigned int npart{0};
+  unsigned int ncoll{0};
+  unsigned int ncollBB{0};
+
+  stream >> eventId >> nv >> ncollG >> npartG
+         >> impactParameter >> npart >> ncoll >> ncollBB;
+
+  std::cout << "working on event#" << eventId << std::endl;
 
   getEntity<UEvent>()->Clear();
-  getEntity<UEvent>()->SetParameters(eventId, impactParameter, 0., 0, 0, 0.);
+  getEntity<UEvent>()->SetParameters(eventId, (float)impactParameter, 0., 0, 0, 0.);
 
   getEntity<EventInitialState>()->clear();
   getEntity<EventInitialState>()->setId(eventId);
-  getEntity<EventInitialState>()->setNPart(nParticipants);
-  getEntity<EventInitialState>()->setNColl(nCollisions);
+  getEntity<EventInitialState>()->setNPart(npartG);
+  getEntity<EventInitialState>()->setNColl(ncoll);
+
 }
 
 void parseParticle(const string &line) {
   stringstream stream(line);
 
-  int par0{-1};
-  int pdgCode{0};
-  int par2{-1};
+  int par0{-1};      // status
+  int pdgCode{0};    // id
+  int par2{-1};      // nColl (can be negative in JAM2)
 
   float mass{0};
   float px{0};
@@ -104,12 +111,16 @@ void parseParticle(const string &line) {
   float z{0};
   float time{0};
 
+  // NOTE:
+  // JAM2 can append extra trailing columns (e.g. tform).
+  // We intentionally read only the first 12 columns and ignore the rest.
   stream
       >> par0 >> pdgCode >> par2
       >> mass >> px >> py >> pz >> energy
       >> x >> y >> z >> time;
-
-  getEntity<UParticle>()->Clear();
+  //if (std::fabs(par2) == 1) return;
+  getEntity<UParticle>()->SetMate(par2);
+  getEntity<UParticle>()->SetStatus(par0);
   getEntity<UParticle>()->SetPdg(pdgCode);
   getEntity<UParticle>()->SetPosition(x, y, z, time);
   getEntity<UParticle>()->SetMomentum(px, py, pz, energy);
@@ -120,12 +131,13 @@ void particlePostProcess() {
 }
 
 void previousEventPostProcess() {
-  getEntity<UEvent>()->Print();
+  // getEntity<UEvent>()->Print();
 
+  // keep the same selection logic as in the legacy reader:
+  // store only events with non-zero NColl
   if (getEntity<EventInitialState>()->getNColl() != 0) {
     gEventTree->Fill();
   }
-
 }
 
 int main(int argc, char **argv) {
@@ -141,17 +153,20 @@ int main(int argc, char **argv) {
     jamOutputFileName = string(argv[2]);
   }
 
-  string runInfoFileName{"JAMRUN.DAT"};
-  if (argc > 3) {
-    runInfoFileName = string(argv[3]);
+  ifstream inputFile(inputFileName);
+  if (!inputFile.is_open()) {
+    Error(__func__, "Cannot open input file: %s", inputFileName.c_str());
+    return 2;
   }
 
-  ifstream inputFile(argv[1]);
   gOutputFile = TFile::Open(jamOutputFileName.c_str(), "recreate");
 
   gEventTree = new TTree("events", "JAM events");
   gEventTree->Branch("event", getEntity<UEvent>());
   gEventTree->Branch("iniState", getEntity<EventInitialState>());
+
+  // Create URun and fill with zeroes for now (JAM2 has no JAMRUN.DAT)
+  initURunWithZeroes();
 
   bool hasPreviousEvent{false};
   unsigned int nEvents{0};
@@ -163,36 +178,38 @@ int main(int argc, char **argv) {
     ELineType currentLineType{ELineType::kNotInitializedYet};
 
     switch (nWords) {
-      case 6:currentLineType = ELineType::kRunHeader;
-        parseRunHeader(line);
-        break;
-      case 9:currentLineType = ELineType::kEventHeader;
+      // JAM2 has many comment/config lines starting with '#'.
+      // We ignore them unless they match the event header word count.
+      case 9:
+        currentLineType = ELineType::kEventHeader;
+
         if (hasPreviousEvent) previousEventPostProcess();
         parseEventHeader(line);
+
         hasPreviousEvent = true;
         nEvents++;
         break;
-      case 13:currentLineType = ELineType::kParticle;
+
+      case 13:
+        currentLineType = ELineType::kParticle;
         parseParticle(line);
         particlePostProcess();
         break;
-      default:currentLineType = ELineType::kUnknown;
+
+      default:
+        currentLineType = ELineType::kUnknown;
     }
   }
 
-  if (hasPreviousEvent) previousEventPostProcess();
-
-  if (nEvents != getEntity<URun>()->GetNEvents()) {
-    Error(__func__, "nEvents(%d) != actual(%d)", nEvents, getEntity<URun>()->GetNEvents());
-    return 1;
+  if (hasPreviousEvent) {
+    previousEventPostProcess();
   }
 
+  // Write outputs
   gEventTree->Write();
 
-  if (parseJAMRunInfo(runInfoFileName) == EParseStatus::kSuccess) {
-    getEntity<URun>()->Print();
-    getEntity<URun>()->Write();
-  }
+  // Write URun with zeroes for now (placeholder)
+  getEntity<URun>()->Write();
 
   gOutputFile->Close();
 

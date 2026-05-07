@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.27)
 project(McIniData)
 
 list(APPEND CMAKE_PREFIX_PATH $ENV{ROOTSYS})
@@ -32,8 +32,11 @@ add_library(McIniData SHARED G__McIniData.cxx src/URun.cxx src/UEvent.cxx src/UP
 target_link_libraries(McIniData PRIVATE ${ROOT_LIBRARIES})
 
 add_executable(JAMReader src/jam/JAMRunInfo.cxx src/jam/JAMReader.cxx)
+add_executable(JAM2Reader src/jam/JAM2Reader.cxx)
 if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.9.0)
   target_link_libraries(JAMReader PUBLIC McIniData ${ROOT_LIBRARIES} ${Boost_LIBRARIES})
+  target_link_libraries(JAM2Reader PUBLIC McIniData ${ROOT_LIBRARIES} ${Boost_LIBRARIES})
 else()
   target_link_libraries(JAMReader PUBLIC McIniData ${ROOT_LIBRARIES})
+  target_link_libraries(JAM2Reader PUBLIC McIniData ${ROOT_LIBRARIES})
 endif ()
